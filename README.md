@@ -2,7 +2,7 @@
 ## ping
 
 ### oh, what is whis for?
-my goal is to create a simple ping implementation without using `net/icmp` package. i find it funny, im enjoying building packages from scratch :)
+my goal is to create a simple ping implementation without using `net/icmp` package. i find it funny, im enjoying building network packets from scratch :)
 
 ---
 
