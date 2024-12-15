@@ -48,7 +48,7 @@ func CreateEchoPacket(data []byte) *EchoPacket {
 			Timestamp: uint64(time.Now().UnixMilli()),
 			RawData:   data,
 		},
-		Identifier:     0,
+		Identifier:     uint16(os.Getpid() & 0xffff),
 		SequenceNumber: 0,
 	}
 }

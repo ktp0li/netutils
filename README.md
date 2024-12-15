@@ -34,9 +34,7 @@ PING ya.ru (77.88.55.242) with 12(40) bytes of data
 20 bytes from 77.88.55.242: icmp_seq=3 ttl=246 time=19 ms
 20 bytes from 77.88.55.242: icmp_seq=4 ttl=246 time=19 ms
 20 bytes from 77.88.55.242: icmp_seq=5 ttl=246 time=17 ms
-
 ```
 TODO:
 - add summary after ping (statistic)
 - make two threads for sending/receiving packets
-- add identifier to icmp payload
