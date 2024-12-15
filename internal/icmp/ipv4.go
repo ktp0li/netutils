@@ -12,6 +12,11 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
+const (
+	uint64Size = 8
+	HeaderLen  = 8
+)
+
 type EchoPacket struct {
 	Type           uint8
 	Code           uint8
@@ -24,6 +29,14 @@ type EchoPacket struct {
 type EchoPacketData struct {
 	Timestamp uint64
 	RawData   []byte
+}
+
+func (e *EchoPacket) Length() int {
+	return HeaderLen + e.Data.Length()
+}
+
+func (e *EchoPacketData) Length() int {
+	return uint64Size + len(e.RawData)
 }
 
 func CreateEchoPacket(data []byte) *EchoPacket {

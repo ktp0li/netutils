@@ -64,7 +64,10 @@ func main() {
 	conn.SetDeadline(time.Now().Add(connTimeToDeadline))
 	defer conn.Close()
 
-	fmt.Printf("PING %v (%v) with TODO bytes of data\n", flagAddressToConnect, address)
+	icmpExamplePacket := icmp.CreateEchoPacket([]byte("heyy"))
+	packetSize := icmpExamplePacket.Length() + ipv4.HeaderLen
+
+	fmt.Printf("PING %v (%v) with %d(%d) bytes of data\n", flagAddressToConnect, address, icmpExamplePacket.Data.Length(), packetSize)
 
 	icmpDestAddr := net.UDPAddr{IP: address}
 
