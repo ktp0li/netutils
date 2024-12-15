@@ -3,9 +3,13 @@ package icmp
 import (
 	"bytes"
 	"encoding/binary"
+	"net"
+	"os"
+	"syscall"
 	"time"
 
 	"github.com/pkg/errors"
+	"golang.org/x/net/ipv4"
 )
 
 type EchoPacket struct {
@@ -38,6 +42,13 @@ func CreateEchoPacket(data []byte) *EchoPacket {
 
 func GetChecksum(raw []byte) uint16 {
 	checksum := uint32(0)
+
+	// if length of packet is odd, workaround by switch last byte to last octet (0x05 to 0x00 0x05)
+	if len(raw)%2 != 0 {
+		secondLastbyte := raw[len(raw)-2]
+		raw[len(raw)-2] = 0x00
+		raw = append(raw, secondLastbyte)
+	}
 
 	for i := 0; i < len(raw); i += 2 {
 		octet := uint16(raw[i])<<8 + uint16(raw[i+1])
@@ -119,19 +130,54 @@ func (p *EchoPacket) Marshal() ([]byte, error) {
 
 func ParseEchoReplyPacket(rawPacket []byte) *EchoPacket {
 	packet := new(EchoPacket)
-	// packet without IP part
-	icmpRawPacket := rawPacket[20:]
 
-	packet.Type = uint8(icmpRawPacket[0])
-	packet.Code = uint8(icmpRawPacket[1])
+	packet.Type = uint8(rawPacket[0])
+	packet.Code = uint8(rawPacket[1])
 
-	packet.Checksum = binary.BigEndian.Uint16(icmpRawPacket[2:4])
+	packet.Checksum = binary.BigEndian.Uint16(rawPacket[2:4])
 
-	packet.Identifier = binary.BigEndian.Uint16(icmpRawPacket[4:6])
-	packet.SequenceNumber = binary.BigEndian.Uint16(icmpRawPacket[6:8])
+	packet.Identifier = binary.BigEndian.Uint16(rawPacket[4:6])
+	packet.SequenceNumber = binary.BigEndian.Uint16(rawPacket[6:8])
 
-	packet.Data.Timestamp = binary.LittleEndian.Uint64(icmpRawPacket[8:16])
-	packet.Data.RawData = icmpRawPacket[16:]
+	packet.Data.Timestamp = binary.LittleEndian.Uint64(rawPacket[8:16])
+	packet.Data.RawData = rawPacket[16:]
 
 	return packet
+}
+
+func NewUnprivilegedIPv4Connection(ipAddr [4]byte) (*ipv4.PacketConn, error) {
+	s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
+	if err != nil {
+		return nil, err
+	}
+
+	sa := &syscall.SockaddrInet4{Addr: ipAddr}
+
+	if err := syscall.Bind(s, sa); err != nil {
+		syscall.Close(s)
+		return nil, os.NewSyscallError("bind", err)
+	}
+
+	f := os.NewFile(uintptr(s), "datagram-oriented icmp")
+	conn, err := net.FilePacketConn(f)
+	if err != nil {
+		return nil, err
+	}
+
+	f.Close()
+
+	ipv4Conn := ipv4.NewPacketConn(conn)
+
+	return ipv4Conn, nil
+}
+
+func NewPrivilegedIPv4Connection(ipAddr string) (*ipv4.PacketConn, error) {
+	conn, err := net.ListenPacket("ip4:icmp", ipAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	ipv4Conn := ipv4.NewPacketConn(conn)
+
+	return ipv4Conn, nil
 }
