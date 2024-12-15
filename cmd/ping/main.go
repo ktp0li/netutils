@@ -84,7 +84,7 @@ func main() {
 
 func init() {
 	flag.IntVarP(&flagPacketsCount, "count", "c", 0, "stop after <count> replies")
-	flag.BoolVar(&flagIsPrivileged, "privileged", false, "run with tcp:icmp socket instead udp")
+	flag.BoolVar(&flagIsPrivileged, "privileged", false, "run with ip:icmp socket instead udp")
 	isDebug := flag.BoolP("debug", "d", false, "")
 	flag.Parse()
 
