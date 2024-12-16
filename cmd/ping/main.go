@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"ping/internal/icmp"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -16,7 +17,7 @@ import (
 )
 
 const (
-	connTimeToDeadline        = 1 * time.Minute
+	connTimeToDeadline        = 30 * time.Second
 	timeToSleepBetweenPackets = 1 * time.Second
 )
 
@@ -44,7 +45,7 @@ func main() {
 	// ---
 
 	// parse address to connect
-	address, err := getIPv4Addr(flagAddressToConnect)
+	destAddress, err := getIPv4Addr(flagAddressToConnect)
 	if err != nil {
 		logger.Fatalf("cannot get ipv4 address: %v", err)
 	}
@@ -53,7 +54,7 @@ func main() {
 	if flagIsPrivileged {
 		conn, err = icmp.NewPrivilegedIPv4Connection(addressToBind.String())
 	} else {
-		conn, err = icmp.NewUnprivilegedIPv4Connection([4]byte(addressToBind))
+		conn, err = icmp.NewUnprivilegedIPv4Connection(addressToBind)
 	}
 
 	if err != nil {
@@ -61,28 +62,40 @@ func main() {
 	}
 
 	conn.SetControlMessage(ipv4.FlagTTL, true)
-	conn.SetDeadline(time.Now().Add(connTimeToDeadline))
 	defer conn.Close()
 
 	icmpExamplePacket := icmp.CreateEchoPacket([]byte("heyy"))
 	packetSize := icmpExamplePacket.Length() + ipv4.HeaderLen
 
-	fmt.Printf("PING %v (%v) with %d(%d) bytes of data\n", flagAddressToConnect, address, icmpExamplePacket.Data.Length(), packetSize)
+	fmt.Printf("PING %v (%v) with %d(%d) bytes of data\n", flagAddressToConnect, destAddress, icmpExamplePacket.Data.Length(), packetSize)
 
-	icmpDestAddr := net.UDPAddr{IP: address}
+	icmpDestAddr := net.UDPAddr{IP: destAddress}
+
+	var wg sync.WaitGroup
+
+	receivedPacketStatsChan := make(chan receivedPacketStats)
+	go PrintStats(receivedPacketStatsChan, icmpExamplePacket.Length(), destAddress, flagAddressToConnect)
 
 	if flagPacketsCount == 0 {
 		packetCounter := 1
 		for {
-			sendAndReceiveEchoPacket(logger, conn, &icmpDestAddr, packetCounter)
+			go sendEchoPacket(logger, conn, &icmpDestAddr, packetCounter)
+			go receiveEchoPacket(nil, logger, conn, receivedPacketStatsChan)
+
 			packetCounter += 1
+			time.Sleep(timeToSleepBetweenPackets)
 		}
 	} else {
+		wg.Add(flagPacketsCount)
 		for i := 1; i <= flagPacketsCount; i += 1 {
-			sendAndReceiveEchoPacket(logger, conn, &icmpDestAddr, i)
+			go sendEchoPacket(logger, conn, &icmpDestAddr, i)
+			go receiveEchoPacket(&wg, logger, conn, receivedPacketStatsChan)
+
+			time.Sleep(timeToSleepBetweenPackets)
 		}
 	}
 
+	wg.Wait()
 }
 
 func init() {
@@ -104,9 +117,13 @@ func init() {
 	flagAddressToConnect = flag.Arg(0)
 }
 
-func sendAndReceiveEchoPacket(logger *zap.SugaredLogger, conn *ipv4.PacketConn, addr *net.UDPAddr, seqNumber int) {
-	buff := make([]byte, 1024)
+type receivedPacketStats struct {
+	SeqNumber int
+	Time      time.Duration
+	TTL       int
+}
 
+func sendEchoPacket(logger *zap.SugaredLogger, conn *ipv4.PacketConn, addr *net.UDPAddr, seqNumber int) {
 	icmpEchoPacket := icmp.CreateEchoPacket([]byte("heyy"))
 
 	icmpEchoPacket.SequenceNumber = uint16(seqNumber)
@@ -121,6 +138,11 @@ func sendAndReceiveEchoPacket(logger *zap.SugaredLogger, conn *ipv4.PacketConn, 
 	if err != nil {
 		logger.Fatal(err)
 	}
+
+}
+
+func receiveEchoPacket(wg *sync.WaitGroup, logger *zap.SugaredLogger, conn *ipv4.PacketConn, packetStatsChan chan<- receivedPacketStats) {
+	buff := make([]byte, 1024)
 
 	length, cm, _, err := conn.ReadFrom(buff)
 	if err != nil {
@@ -141,9 +163,15 @@ func sendAndReceiveEchoPacket(logger *zap.SugaredLogger, conn *ipv4.PacketConn, 
 
 	rttTime := time.Since(time.UnixMilli(int64(reply.Data.Timestamp)))
 
-	fmt.Printf("%d bytes from %v: icmp_seq=%d ttl=%d time=%d ms\n", len(icmpEchoRawPacket), addr.IP, seqNumber, replyTTL, rttTime.Milliseconds())
+	packetStatsChan <- receivedPacketStats{
+		SeqNumber: int(reply.SequenceNumber),
+		Time:      rttTime,
+		TTL:       replyTTL,
+	}
 
-	time.Sleep(timeToSleepBetweenPackets)
+	if wg != nil {
+		wg.Done()
+	}
 }
 
 func getIPv4Addr(addr string) (net.IP, error) {
@@ -163,4 +191,18 @@ func getIPv4Addr(addr string) (net.IP, error) {
 	}
 
 	return nil, fmt.Errorf("cannot find valid ipv4 address for this domain")
+}
+
+func PrintStats(packetStatsChan <-chan receivedPacketStats, packetLength int, destAddressIP net.IP, destAddressDomain string) {
+	for {
+		stats := <-packetStatsChan
+		if destAddressDomain == destAddressIP.String() {
+			fmt.Printf("%d bytes from %v: icmp_seq=%d ttl=%d time=%d ms\n",
+				packetLength, destAddressIP.String(), stats.SeqNumber, stats.TTL, stats.Time.Milliseconds())
+		} else {
+			fmt.Printf("%d bytes from %v (%v): icmp_seq=%d ttl=%d time=%d ms\n",
+				packetLength, destAddressDomain, destAddressIP.String(), stats.SeqNumber, stats.TTL, stats.Time.Milliseconds())
+
+		}
+	}
 }

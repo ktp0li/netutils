@@ -37,4 +37,4 @@ PING ya.ru (77.88.55.242) with 12(40) bytes of data
 ```
 TODO:
 - add summary after ping (statistic)
-- make two threads for sending/receiving packets
+- add timeout (leaked goroutines goes brrr)
