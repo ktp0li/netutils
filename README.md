@@ -37,4 +37,4 @@ PING ya.ru (77.88.55.242) with 12(40) bytes of data
 ```
 TODO:
 - add summary after ping (statistic)
-- add timeout (leaked goroutines goes brrr)
+- maybe parse another packet types? (host unreachable etc)

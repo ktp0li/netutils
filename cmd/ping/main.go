@@ -1,11 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"ping/internal/icmp"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -50,13 +50,15 @@ func main() {
 		logger.Fatalf("cannot get ipv4 address: %v", err)
 	}
 
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	// init connection
 	var conn *ipv4.PacketConn
 	if flagIsPrivileged {
-		conn, err = icmp.NewPrivilegedIPv4Connection(addressToBind.String())
+		conn, err = icmp.NewPrivilegedIPv4Connection(ctx, addressToBind.String())
 	} else {
 		conn, err = icmp.NewUnprivilegedIPv4Connection(addressToBind)
 	}
-
 	if err != nil {
 		logger.Fatalf("cannot create new connection: %v", err)
 	}
@@ -71,31 +73,27 @@ func main() {
 
 	icmpDestAddr := net.UDPAddr{IP: destAddress}
 
-	var wg sync.WaitGroup
-
 	receivedPacketStatsChan := make(chan receivedPacketStats)
 	go PrintStats(receivedPacketStatsChan, icmpExamplePacket.Length(), destAddress, flagAddressToConnect)
+	go receiveEchoPacket(ctx, logger, conn, receivedPacketStatsChan)
 
 	if flagPacketsCount == 0 {
 		packetCounter := 1
 		for {
 			go sendEchoPacket(logger, conn, &icmpDestAddr, packetCounter)
-			go receiveEchoPacket(nil, logger, conn, receivedPacketStatsChan)
 
 			packetCounter += 1
 			time.Sleep(timeToSleepBetweenPackets)
 		}
 	} else {
-		wg.Add(flagPacketsCount)
 		for i := 1; i <= flagPacketsCount; i += 1 {
 			go sendEchoPacket(logger, conn, &icmpDestAddr, i)
-			go receiveEchoPacket(&wg, logger, conn, receivedPacketStatsChan)
 
 			time.Sleep(timeToSleepBetweenPackets)
 		}
+		cancelCtx()
 	}
 
-	wg.Wait()
 }
 
 func init() {
@@ -138,39 +136,42 @@ func sendEchoPacket(logger *zap.SugaredLogger, conn *ipv4.PacketConn, addr *net.
 	if err != nil {
 		logger.Fatal(err)
 	}
-
 }
 
-func receiveEchoPacket(wg *sync.WaitGroup, logger *zap.SugaredLogger, conn *ipv4.PacketConn, packetStatsChan chan<- receivedPacketStats) {
-	buff := make([]byte, 1024)
+func receiveEchoPacket(ctx context.Context, logger *zap.SugaredLogger, conn *ipv4.PacketConn, packetStatsChan chan<- receivedPacketStats) {
+	for {
+		buff := make([]byte, 1024)
 
-	length, cm, _, err := conn.ReadFrom(buff)
-	if err != nil {
-		logger.Fatal(err)
-	}
+		length, cm, _, err := conn.ReadFrom(buff)
+		if err != nil {
+			logger.Fatal(err)
+		}
 
-	var replyTTL int
-	if cm == nil {
-		replyTTL = -1
-	} else {
-		replyTTL = cm.TTL
-	}
+		select {
+		default:
+			var replyTTL int
+			if cm == nil {
+				replyTTL = -1
+			} else {
+				replyTTL = cm.TTL
+			}
 
-	logger.Debugf("read %v bytes, got packet: %v", length, buff)
+			logger.Debugf("read %v bytes, got packet: %v", length, buff)
 
-	reply := icmp.ParseEchoReplyPacket(buff[:length])
-	logger.Debugf("parsed package: %+v", reply)
+			reply := icmp.ParseEchoReplyPacket(buff[:length])
+			logger.Debugf("parsed package: %+v", reply)
 
-	rttTime := time.Since(time.UnixMilli(int64(reply.Data.Timestamp)))
+			rttTime := time.Since(time.UnixMilli(int64(reply.Data.Timestamp)))
 
-	packetStatsChan <- receivedPacketStats{
-		SeqNumber: int(reply.SequenceNumber),
-		Time:      rttTime,
-		TTL:       replyTTL,
-	}
-
-	if wg != nil {
-		wg.Done()
+			packetStatsChan <- receivedPacketStats{
+				SeqNumber: int(reply.SequenceNumber),
+				Time:      rttTime,
+				TTL:       replyTTL,
+			}
+		case <-ctx.Done():
+			logger.Warn("goroutine with readpacket done")
+			return
+		}
 	}
 }
 

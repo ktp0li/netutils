@@ -2,6 +2,7 @@ package icmp
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"net"
 	"os"
@@ -158,13 +159,13 @@ func ParseEchoReplyPacket(rawPacket []byte) *EchoPacket {
 	return packet
 }
 
-func NewUnprivilegedIPv4Connection(ipAddr [4]byte) (*ipv4.PacketConn, error) {
+func NewUnprivilegedIPv4Connection(sourceIPAddr net.IP) (*ipv4.PacketConn, error) {
 	s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
 	if err != nil {
 		return nil, err
 	}
 
-	sa := &syscall.SockaddrInet4{Addr: ipAddr}
+	sa := &syscall.SockaddrInet4{Addr: [4]byte(sourceIPAddr.To4())}
 
 	if err := syscall.Bind(s, sa); err != nil {
 		syscall.Close(s)
@@ -184,8 +185,11 @@ func NewUnprivilegedIPv4Connection(ipAddr [4]byte) (*ipv4.PacketConn, error) {
 	return ipv4Conn, nil
 }
 
-func NewPrivilegedIPv4Connection(ipAddr string) (*ipv4.PacketConn, error) {
-	conn, err := net.ListenPacket("ip4:icmp", ipAddr)
+func NewPrivilegedIPv4Connection(ctx context.Context, ipAddr string) (*ipv4.PacketConn, error) {
+	//	conn, err := net.ListenPacket("ip4:icmp", ipAddr)
+	ListenConfig := net.ListenConfig{}
+
+	conn, err := ListenConfig.ListenPacket(ctx, "ip4:icmp", ipAddr)
 	if err != nil {
 		return nil, err
 	}
