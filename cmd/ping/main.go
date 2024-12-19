@@ -20,20 +20,19 @@ import (
 	flag "github.com/spf13/pflag"
 )
 
-const (
-	connTimeToDeadline        = 10 * time.Second
-	timeToSleepBetweenPackets = 1 * time.Second
-)
-
 var (
 	flagAddressToConnect string
 	logLevel             zapcore.Level
 	flagPacketsCount     int
 	flagIsPrivileged     bool
+	flagDataToTransfer   []byte
+	flagTimeToSleep      time.Duration
 )
 
 var (
-	addressToBind = net.ParseIP("0.0.0.0")
+	defaultAddressToBind             = net.ParseIP("0.0.0.0")
+	defaultDataInPacket              = []byte("heyy")
+	defaultTimeToSleepBetweenPackets = 1 * time.Second
 )
 
 func main() {
@@ -57,9 +56,9 @@ func main() {
 	// init connection
 	var conn *ipv4.PacketConn
 	if flagIsPrivileged {
-		conn, err = icmp.NewPrivilegedIPv4Connection(addressToBind.String())
+		conn, err = icmp.NewPrivilegedIPv4Connection(defaultAddressToBind.String())
 	} else {
-		conn, err = icmp.NewUnprivilegedIPv4Connection(addressToBind)
+		conn, err = icmp.NewUnprivilegedIPv4Connection(defaultAddressToBind)
 	}
 	if err != nil {
 		logger.Fatalf("cannot create new connection: %v", err)
@@ -70,7 +69,7 @@ func main() {
 	defer conn.Close()
 
 	// create packet to examine its size
-	icmpPacketForStats := icmp.CreateEchoPacket([]byte("heyy"))
+	icmpPacketForStats := icmp.CreateEchoPacket(flagDataToTransfer)
 	packetSize := icmpPacketForStats.Length() + ipv4.HeaderLen
 
 	fmt.Printf("PING %v (%v) with %d(%d) bytes of data\n", flagAddressToConnect, destAddress, icmpPacketForStats.Data.Length(), packetSize)
@@ -98,7 +97,7 @@ func main() {
 		default:
 		}
 		go sendEchoPacket(logger, conn, &net.UDPAddr{IP: destAddress}, i)
-		time.Sleep(timeToSleepBetweenPackets)
+		time.Sleep(flagTimeToSleep)
 	}
 	sentPacketsCountChan <- flagPacketsCount
 	wg.Wait()
@@ -108,6 +107,8 @@ func main() {
 func init() {
 	flag.IntVarP(&flagPacketsCount, "count", "c", -1, "stop after <count> replies")
 	flag.BoolVar(&flagIsPrivileged, "privileged", false, "run with ip:icmp socket instead udp")
+	flag.BytesBase64Var(&flagDataToTransfer, "data", defaultDataInPacket, "data to transfer in package body")
+	flag.DurationVar(&flagTimeToSleep, "delay", defaultTimeToSleepBetweenPackets, "delay between sending packets")
 	isDebug := flag.BoolP("debug", "d", false, "")
 	flag.Parse()
 
@@ -131,7 +132,7 @@ type receivedPacketInfo struct {
 }
 
 func sendEchoPacket(logger *zap.SugaredLogger, conn *ipv4.PacketConn, addr *net.UDPAddr, seqNumber int) {
-	icmpEchoPacket := icmp.CreateEchoPacket([]byte("heyy"))
+	icmpEchoPacket := icmp.CreateEchoPacket(flagDataToTransfer)
 
 	icmpEchoPacket.SequenceNumber = uint16(seqNumber)
 	icmpEchoRawPacket, err := icmpEchoPacket.Prepare()
