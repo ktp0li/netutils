@@ -65,22 +65,24 @@ func main() {
 		logger.Fatalf("cannot create new connection: %v", err)
 	}
 
+	// this option allows to receive ttl from control message
 	conn.SetControlMessage(ipv4.FlagTTL, true)
 	defer conn.Close()
 
+	// create packet to examine its size
 	icmpPacketForStats := icmp.CreateEchoPacket([]byte("heyy"))
 	packetSize := icmpPacketForStats.Length() + ipv4.HeaderLen
 
 	fmt.Printf("PING %v (%v) with %d(%d) bytes of data\n", flagAddressToConnect, destAddress, icmpPacketForStats.Data.Length(), packetSize)
 
-	icmpDestAddr := net.UDPAddr{IP: destAddress}
-
+	// notify via channel when ctrl+C is pressed
 	interruptChan := make(chan os.Signal, 1)
 	signal.Notify(interruptChan, os.Interrupt, syscall.SIGINT)
 
 	receivedPacketStatsChan := make(chan receivedPacketInfo)
 	sentPacketsCountChan := make(chan int)
 
+	// create waitgroup for waiting until statistics are printed
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -95,7 +97,7 @@ func main() {
 			os.Exit(0)
 		default:
 		}
-		go sendEchoPacket(logger, conn, &icmpDestAddr, i)
+		go sendEchoPacket(logger, conn, &net.UDPAddr{IP: destAddress}, i)
 		time.Sleep(timeToSleepBetweenPackets)
 	}
 	sentPacketsCountChan <- flagPacketsCount
@@ -151,7 +153,7 @@ func receiveEchoPacket(logger *zap.SugaredLogger, conn *ipv4.PacketConn, packetS
 
 		length, cm, _, err := conn.ReadFrom(buff)
 		if err != nil {
-			logger.Fatal(err)
+			logger.Fatalf("cannot read from connection: %v", err)
 		}
 
 		var replyTTL int
