@@ -144,7 +144,7 @@ func sendEchoPacket(logger *zap.SugaredLogger, conn *ipv4.PacketConn, addr *net.
 
 	_, err = conn.WriteTo(icmpEchoRawPacket, nil, addr)
 	if err != nil {
-		logger.Fatal(err)
+		logger.Fatalf("cannot write to connection: %v", err)
 	}
 }
 
