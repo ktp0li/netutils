@@ -247,7 +247,7 @@ func printPacketStats(wg *sync.WaitGroup, packetStatsChan <-chan receivedPacketI
 			fmt.Printf("%d packets transmitted, %d received, %.0f%% packet loss, %d ms\n", sentPacketsCount, receivedPacketsCount,
 				packetLossPercent, time.Since(startTime).Milliseconds())
 			if receivedPacketsCount != 0 {
-				fmt.Printf("rtt min/avg/max/mdev = %.3f/%.3f/%.3f/%.3f ms\n", minRTT, sumRTT/float64(receivedPacketsCount), maxRTT, mdev)
+				fmt.Printf("rtt min/avg/max/mdev = %.3f/%.3f/%.3f/%.3f ms\n", minRTT, sumRTT, maxRTT, mdev)
 			}
 
 			return
