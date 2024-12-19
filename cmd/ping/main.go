@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"math"
@@ -55,8 +54,6 @@ func main() {
 		logger.Fatalf("cannot get ipv4 address: %v", err)
 	}
 
-	ctx, cancelCtx := context.WithCancel(context.Background())
-
 	// init connection
 	var conn *ipv4.PacketConn
 	if flagIsPrivileged {
@@ -80,10 +77,6 @@ func main() {
 
 	interruptChan := make(chan os.Signal, 1)
 	signal.Notify(interruptChan, os.Interrupt, syscall.SIGINT)
-	go func() {
-		<-interruptChan
-		cancelCtx()
-	}()
 
 	receivedPacketStatsChan := make(chan receivedPacketInfo)
 	sentPacketsCountChan := make(chan int)
@@ -96,9 +89,8 @@ func main() {
 
 	for i := 1; i != flagPacketsCount+1; i += 1 {
 		select {
-		case <-ctx.Done():
+		case <-interruptChan:
 			sentPacketsCountChan <- i
-			cancelCtx()
 			wg.Wait()
 			os.Exit(0)
 		default:
@@ -106,9 +98,7 @@ func main() {
 		go sendEchoPacket(logger, conn, &icmpDestAddr, i)
 		time.Sleep(timeToSleepBetweenPackets)
 	}
-	fmt.Println("puk")
 	sentPacketsCountChan <- flagPacketsCount
-	cancelCtx()
 	wg.Wait()
 	os.Exit(0)
 }
