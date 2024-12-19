@@ -201,7 +201,9 @@ func printPacketStats(wg *sync.WaitGroup, packetStatsChan <-chan receivedPacketI
 	receivedPacketsCount := 0
 	minRTT := math.MaxFloat64
 	maxRTT := 0.0
+
 	sumRTT := 0.0
+	sumRTT2 := 0.0
 
 	for {
 		select {
@@ -226,17 +228,23 @@ func printPacketStats(wg *sync.WaitGroup, packetStatsChan <-chan receivedPacketI
 			}
 
 			sumRTT += rtt
+			sumRTT2 += rtt * rtt
 			receivedPacketsCount += 1
 
 		case sentPacketsCount := <-sentPacketsCountChan:
 			defer wg.Done()
+
+			sumRTT /= float64(receivedPacketsCount)
+			sumRTT2 /= float64(receivedPacketsCount)
+
+			mdev := math.Sqrt(sumRTT2 - sumRTT*sumRTT)
 			packetLossPercent := (1 - float64(receivedPacketsCount)/float64(sentPacketsCount)) * 100
 
 			fmt.Printf("\n--- %v ping statistics ---\n", destAddressIP.String())
 			fmt.Printf("%d packets transmitted, %d received, %.0f%% packet loss, %d ms\n", sentPacketsCount, receivedPacketsCount,
 				packetLossPercent, time.Since(startTime).Milliseconds())
 			if receivedPacketsCount != 0 {
-				fmt.Printf("rtt min/avg/max/mdev = %.3f/%.3f/%.3f/TODO ms\n", minRTT, sumRTT/float64(receivedPacketsCount), maxRTT)
+				fmt.Printf("rtt min/avg/max/mdev = %.3f/%.3f/%.3f/%.3f ms\n", minRTT, sumRTT/float64(receivedPacketsCount), maxRTT, mdev)
 			}
 
 			return
