@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"ping/internal/icmp"
+	"sync"
 	"syscall"
 	"time"
 
@@ -70,10 +71,10 @@ func main() {
 	conn.SetControlMessage(ipv4.FlagTTL, true)
 	defer conn.Close()
 
-	icmpExamplePacket := icmp.CreateEchoPacket([]byte("heyy"))
-	packetSize := icmpExamplePacket.Length() + ipv4.HeaderLen
+	icmpPacketForStats := icmp.CreateEchoPacket([]byte("heyy"))
+	packetSize := icmpPacketForStats.Length() + ipv4.HeaderLen
 
-	fmt.Printf("PING %v (%v) with %d(%d) bytes of data\n", flagAddressToConnect, destAddress, icmpExamplePacket.Data.Length(), packetSize)
+	fmt.Printf("PING %v (%v) with %d(%d) bytes of data\n", flagAddressToConnect, destAddress, icmpPacketForStats.Data.Length(), packetSize)
 
 	icmpDestAddr := net.UDPAddr{IP: destAddress}
 
@@ -86,32 +87,34 @@ func main() {
 
 	receivedPacketStatsChan := make(chan receivedPacketInfo)
 	sentPacketsCountChan := make(chan int)
-	finalPacketsStatsChan := make(chan finalPacketsStats)
 
-	go printFinalStatsAndExit(sentPacketsCountChan, finalPacketsStatsChan, destAddress)
-	go printPacketStats(ctx, receivedPacketStatsChan, icmpExamplePacket.Length(), destAddress, flagAddressToConnect, finalPacketsStatsChan)
-	go receiveEchoPacket(ctx, logger, conn, receivedPacketStatsChan, sentPacketsCountChan)
+	var wg sync.WaitGroup
+	wg.Add(1)
 
-	if flagPacketsCount == 0 {
-		packetCounter := 1
-		for {
-			go sendEchoPacket(logger, conn, &icmpDestAddr, packetCounter)
+	go printPacketStats(&wg, receivedPacketStatsChan, icmpPacketForStats.Length(), destAddress, flagAddressToConnect, sentPacketsCountChan)
+	go receiveEchoPacket(logger, conn, receivedPacketStatsChan)
 
-			packetCounter += 1
-			time.Sleep(timeToSleepBetweenPackets)
+	for i := 1; i != flagPacketsCount+1; i += 1 {
+		select {
+		case <-ctx.Done():
+			sentPacketsCountChan <- i
+			cancelCtx()
+			wg.Wait()
+			os.Exit(0)
+		default:
 		}
-	} else {
-		for i := 1; i <= flagPacketsCount; i += 1 {
-			go sendEchoPacket(logger, conn, &icmpDestAddr, i)
-
-			time.Sleep(timeToSleepBetweenPackets)
-		}
-		cancelCtx()
+		go sendEchoPacket(logger, conn, &icmpDestAddr, i)
+		time.Sleep(timeToSleepBetweenPackets)
 	}
+	fmt.Println("puk")
+	sentPacketsCountChan <- flagPacketsCount
+	cancelCtx()
+	wg.Wait()
+	os.Exit(0)
 }
 
 func init() {
-	flag.IntVarP(&flagPacketsCount, "count", "c", 0, "stop after <count> replies")
+	flag.IntVarP(&flagPacketsCount, "count", "c", -1, "stop after <count> replies")
 	flag.BoolVar(&flagIsPrivileged, "privileged", false, "run with ip:icmp socket instead udp")
 	isDebug := flag.BoolP("debug", "d", false, "")
 	flag.Parse()
@@ -152,9 +155,7 @@ func sendEchoPacket(logger *zap.SugaredLogger, conn *ipv4.PacketConn, addr *net.
 	}
 }
 
-func receiveEchoPacket(ctx context.Context, logger *zap.SugaredLogger, conn *ipv4.PacketConn, packetStatsChan chan<- receivedPacketInfo, sentPacketsCountChan chan<- int) {
-	sentPacketsCount := 0
-
+func receiveEchoPacket(logger *zap.SugaredLogger, conn *ipv4.PacketConn, packetStatsChan chan<- receivedPacketInfo) {
 	for {
 		buff := make([]byte, 1024)
 
@@ -163,34 +164,24 @@ func receiveEchoPacket(ctx context.Context, logger *zap.SugaredLogger, conn *ipv
 			logger.Fatal(err)
 		}
 
-		select {
-		case <-ctx.Done():
-			fmt.Println("kak1")
-			sentPacketsCountChan <- sentPacketsCount
-			logger.Debug("goroutine with readpacket done")
-			return
-		default:
-			var replyTTL int
-			if cm == nil {
-				replyTTL = -1
-			} else {
-				replyTTL = cm.TTL
-			}
+		var replyTTL int
+		if cm == nil {
+			replyTTL = -1
+		} else {
+			replyTTL = cm.TTL
+		}
 
-			logger.Debugf("read %v bytes, got packet: %v", length, buff)
+		logger.Debugf("read %v bytes, got packet: %v", length, buff)
 
-			reply := icmp.ParseEchoReplyPacket(buff[:length])
-			logger.Debugf("parsed package: %+v", reply)
+		reply := icmp.ParseEchoReplyPacket(buff[:length])
+		logger.Debugf("parsed package: %+v", reply)
 
-			rttTime := time.Since(time.UnixMilli(int64(reply.Data.Timestamp)))
+		rttTime := time.Since(time.UnixMilli(int64(reply.Data.Timestamp)))
 
-			packetStatsChan <- receivedPacketInfo{
-				SeqNumber: int(reply.SequenceNumber),
-				Time:      rttTime,
-				TTL:       replyTTL,
-			}
-
-			sentPacketsCount += 1
+		packetStatsChan <- receivedPacketInfo{
+			SeqNumber: int(reply.SequenceNumber),
+			Time:      rttTime,
+			TTL:       replyTTL,
 		}
 	}
 }
@@ -214,14 +205,9 @@ func getIPv4Addr(addr string) (net.IP, error) {
 	return nil, fmt.Errorf("cannot find valid ipv4 address for this domain")
 }
 
-type finalPacketsStats struct {
-	minRTT               float64
-	maxRTT               float64
-	sumRTT               float64
-	receivedPacketsCount int
-}
+func printPacketStats(wg *sync.WaitGroup, packetStatsChan <-chan receivedPacketInfo, packetLength int, destAddressIP net.IP, destAddressDomain string, sentPacketsCountChan <-chan int) {
+	startTime := time.Now()
 
-func printPacketStats(ctx context.Context, packetStatsChan <-chan receivedPacketInfo, packetLength int, destAddressIP net.IP, destAddressDomain string, finalPacketsStatsChan chan<- finalPacketsStats) {
 	receivedPacketsCount := 0
 	minRTT := math.MaxFloat64
 	maxRTT := 0.0
@@ -234,10 +220,10 @@ func printPacketStats(ctx context.Context, packetStatsChan <-chan receivedPacket
 			rtt := float64(stats.Time.Microseconds()) / 1000
 
 			if destAddressDomain == destAddressIP.String() {
-				fmt.Printf("%d bytes from %v: icmp_seq=%d ttl=%d time=%.1f ms\n",
+				fmt.Printf("%d bytes from %v: icmp_seq=%d ttl=%d time=%.2f ms\n",
 					packetLength, destAddressIP.String(), stats.SeqNumber, stats.TTL, rtt)
 			} else {
-				fmt.Printf("%d bytes from %v (%v): icmp_seq=%d ttl=%d time=%.1f ms\n",
+				fmt.Printf("%d bytes from %v (%v): icmp_seq=%d ttl=%d time=%.2f ms\n",
 					packetLength, destAddressDomain, destAddressIP.String(), stats.SeqNumber, stats.TTL, rtt)
 			}
 
@@ -252,24 +238,18 @@ func printPacketStats(ctx context.Context, packetStatsChan <-chan receivedPacket
 			sumRTT += rtt
 			receivedPacketsCount += 1
 
-		case <-ctx.Done():
-			finalPacketsStatsChan <- finalPacketsStats{
-				minRTT:               minRTT,
-				maxRTT:               maxRTT,
-				sumRTT:               sumRTT,
-				receivedPacketsCount: receivedPacketsCount,
+		case sentPacketsCount := <-sentPacketsCountChan:
+			defer wg.Done()
+			packetLossPercent := (1 - float64(receivedPacketsCount)/float64(sentPacketsCount)) * 100
+
+			fmt.Printf("\n--- %v ping statistics ---\n", destAddressIP.String())
+			fmt.Printf("%d packets transmitted, %d received, %.0f%% packet loss, %d ms\n", sentPacketsCount, receivedPacketsCount,
+				packetLossPercent, time.Since(startTime).Milliseconds())
+			if receivedPacketsCount != 0 {
+				fmt.Printf("rtt min/avg/max/mdev = %.3f/%.3f/%.3f/TODO ms\n", minRTT, sumRTT/float64(receivedPacketsCount), maxRTT)
 			}
+
 			return
 		}
 	}
-}
-
-func printFinalStatsAndExit(sentPacketsCountChan <-chan int, finalPacketsStatsChan <-chan finalPacketsStats, destAddressIP net.IP) {
-	sentPacketsCount := <-sentPacketsCountChan
-	stats := <-finalPacketsStatsChan
-
-	fmt.Printf("\n--- %v ping statistics ---\n", destAddressIP.String())
-	fmt.Printf("%d packets transmitted, %d received, TODO packet loss, time TODO\n", sentPacketsCount, stats.receivedPacketsCount)
-	fmt.Printf("rtt min/avg/max/mdev = %.3f/%.3f/%.3f/TODO ms\n", stats.minRTT, stats.sumRTT/float64(stats.receivedPacketsCount), stats.maxRTT)
-	os.Exit(0)
 }
