@@ -109,7 +109,7 @@ func init() {
 	flag.BoolVar(&flagIsPrivileged, "privileged", false, "run with ip:icmp socket instead udp")
 	flag.BytesBase64Var(&flagDataToTransfer, "data", defaultDataInPacket, "data to transfer in package body")
 	flag.DurationVar(&flagTimeToSleep, "delay", defaultTimeToSleepBetweenPackets, "delay between sending packets")
-	isDebug := flag.BoolP("debug", "d", false, "")
+	isDebug := flag.BoolP("debug", "d", false, "print debug messages")
 	flag.Parse()
 
 	if len(flag.Args()) != 1 {
