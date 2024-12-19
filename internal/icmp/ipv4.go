@@ -2,7 +2,6 @@ package icmp
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"net"
 	"os"
@@ -185,11 +184,8 @@ func NewUnprivilegedIPv4Connection(sourceIPAddr net.IP) (*ipv4.PacketConn, error
 	return ipv4Conn, nil
 }
 
-func NewPrivilegedIPv4Connection(ctx context.Context, ipAddr string) (*ipv4.PacketConn, error) {
-	//	conn, err := net.ListenPacket("ip4:icmp", ipAddr)
-	ListenConfig := net.ListenConfig{}
-
-	conn, err := ListenConfig.ListenPacket(ctx, "ip4:icmp", ipAddr)
+func NewPrivilegedIPv4Connection(ipAddr string) (*ipv4.PacketConn, error) {
+	conn, err := net.ListenPacket("ip4:icmp", ipAddr)
 	if err != nil {
 		return nil, err
 	}
